@@ -1,3 +1,4 @@
+# coding: utf-8
 # Generate pages from individual records in yml files
 # (c) 2014-2016 Adolfo Villafiorita
 # Distributed under the conditions of the MIT License
@@ -10,7 +11,10 @@ module Jekyll
       if(name.is_a? Integer)
         return name.to_s
       end
-      return name.downcase.strip.gsub(' ', '-').gsub(/[^\w.-]/, '')
+      return name.tr(
+  "ÀÁÂÃÄÅàáâãäåĀāĂăĄąÇçĆćĈĉĊċČčÐðĎďĐđÈÉÊËèéêëĒēĔĕĖėĘęĚěĜĝĞğĠġĢģĤĥĦħÌÍÎÏìíîïĨĩĪīĬĭĮįİıĴĵĶķĸĹĺĻļĽľĿŀŁłÑñŃńŅņŇňŉŊŋÑñÒÓÔÕÖØòóôõöøŌōŎŏŐőŔŕŖŗŘřŚśŜŝŞşŠšſŢţŤťŦŧÙÚÛÜùúûüŨũŪūŬŭŮůŰűŲųŴŵÝýÿŶŷŸŹźŻżŽž",
+  "AAAAAAaaaaaaAaAaAaCcCcCcCcCcDdDdDdEEEEeeeeEeEeEeEeEeGgGgGgGgHhHhIIIIiiiiIiIiIiIiIiJjKkkLlLlLlLlLlNnNnNnNnnNnNnOOOOOOooooooOoOoOoRrRrRrSsSsSsSssTtTtTtUUUUuuuuUuUuUuUuUuUuWwYyyYyYZzZzZz"
+).downcase.strip.gsub(' ', '-').gsub(/[^\w.-]/, '')
     end
   end
 
@@ -24,31 +28,49 @@ module Jekyll
     # - `dir` is the default output directory
     # - `data` is the data defined in `_data.yml` of the record for which we are generating a page
     # - `name` is the key in `data` which determines the output filename
+    # - `name_expr` is an expression for generating the output filename
     # - `template` is the name of the template for generating the page
     # - `extension` is the extension for the generated file
-    def initialize(site, base, index_files, dir, data, name, template, extension)
+    def initialize(site, base, index_files, dir, data, name, name_expr, template, extension)
       @site = site
       @base = base
 
       # @dir is the directory where we want to output the page
       # @name is the name of the page to generate
+      # @name_expr is an expression for generating the name of the page
       #
       # the value of these variables changes according to whether we
       # want to generate named folders or not
-      filename = sanitize_filename(data[name]).to_s
-      if index_files
-        @dir = dir + (index_files ? "/" + filename + "/" : "")
-        @name =  "index" + "." + extension.to_s
+      if name_expr
+        record = data
+        raw_filename = eval(name_expr)
+        if raw_filename == nil
+          puts "error (datapage_gen). name_expr '#{name_expr}' generated an empty value in record #{data}"
+          return
+        end
       else
-        @dir = dir
-        @name = filename + "." + extension.to_s
+        raw_filename = data[name]
+        if raw_filename == nil
+          puts "error (datapage_gen). empty value for field '#{name}' in record #{data}"
+          return
+        end
       end
+
+      filename = sanitize_filename(raw_filename).to_s
+
+      @dir = dir + (index_files ? "/" + filename + "/" : "")
+      @name = (index_files ? "index" : filename) + "." + extension.to_s
 
       self.process(@name)
       self.read_yaml(File.join(base, '_layouts'), template + ".html")
-      self.data['title'] = data[name]
+      self.data['title'] = raw_filename
       # add all the information defined in _data for the current record to the
       # current page (so that we can access it with liquid tags)
+
+      if data.key?('name')
+        data['_name'] = data['name']
+      end
+
       self.data.merge!(data)
     end
   end
@@ -71,8 +93,10 @@ module Jekyll
       data = site.config['page_gen']
       if data
         data.each do |data_spec|
+          index_files_for_this_data = data_spec['index_files'] != nil ? data_spec['index_files'] : index_files
           template = data_spec['template'] || data_spec['data']
           name = data_spec['name']
+          name_expr = data_spec['name_expr']
           dir = data_spec['dir'] || data_spec['data']
           extension = data_spec['extension'] || "html"
 
@@ -87,11 +111,18 @@ module Jekyll
                 records = records[level]
               end
             end
+
+            # apply filtering conditions:
+            # - filter requires the name of a boolean field
+            # - filter_condition evals a ruby expression
+            records = records.select { |r| r[data_spec['filter']] } if data_spec['filter']
+            records = records.select { |record| eval(data_spec['filter_condition']) } if data_spec['filter_condition']
+
             records.each do |record|
-              site.pages << DataPage.new(site, site.source, index_files, dir, record, name, template, extension)
+              site.pages << DataPage.new(site, site.source, index_files_for_this_data, dir, record, name, name_expr, template, extension)
             end
           else
-            puts "error. could not find template #{template}" if not site.layouts.key? template
+            puts "error (datapage_gen). could not find template #{template}" if not site.layouts.key? template
           end
         end
       end
@@ -113,16 +144,11 @@ module Jekyll
     # Thus, if you use the `extension` feature of this plugin, you
     # need to generate the links by hand
     def datapage_url(input, dir)
-      @gen_dir = Jekyll.configuration({})['page_gen-dirs']
-      if @gen_dir then
-        dir + "/" + sanitize_filename(input) + "/index.html"
-      else
-        dir + "/" + sanitize_filename(input) + ".html"
-      end
+      extension = Jekyll.configuration({})['page_gen-dirs'] ? '/' : '.html'
+      "#{dir}/#{sanitize_filename(input)}#{extension}"
     end
   end
 
 end
 
 Liquid::Template.register_filter(Jekyll::DataPageLinkGenerator)
-
